@@ -7,23 +7,28 @@ import torch
 from torch import nn
 import matplotlib.pyplot as plt
 import os
+import torchvision.models as models
+import torchfile
 
 ## Choose the type of the watermark
 Istext = False # True = text watermark, False = Image watermark
 text = "Sapienza Universita' di Roma"
-imgPath = "Stemma_sapienza.png"  #The image needs to be black & white!!!
+imgPath = "image_example.png"  #The image needs to be black & white!!!
 ## The payload need to be smaller than the parameters size of the Model.
 
 ## Choose the pattern
 ## MUTUALLY EXCLUSIVE FUNCTIONS
-
 fullPattern = True 
-evenPattern = False #False: odd pattern, True: even pattern 
-
+evenPattern = False #False: odd pattern, True: even pattern
+ 
 ## 
+padding = 0
+##
+
 
 ## Now choose the model
-MODELFILENAME = 'Watermarked_Model_LSB/MNIST_Model_CLEAN.pth' #Change this to choose the model to place the watermark on
+resnet = True
+MODELFILENAME = 'Watermarked_Model_LSB_Example/CLEAN_cifar10.t7' #Change this to choose the model to place the watermark on
 DIRNAME = 'Watermarked_Model_LSB'#not used
 modelname = 'MINST_MODEL_WATERMARKED_LSB_' 
 identifier = random.randint(10**(8-1), 10**8 - 1)
@@ -32,7 +37,7 @@ identifier = random.randint(10**(8-1), 10**8 - 1)
 
 
 def crea_file_testo(lenbi):
-    with open(create_key_name(), 'wb') as file_bin:
+    with open(create_key_name(), 'wb') as file_bin: #
         file_bin.write(key_value(lenbi).encode('utf-8'))
 
 
@@ -85,7 +90,8 @@ def key_value(lenBin): #First value: format, Second value: type of wm, 3 & 4: si
         key += str(get_image_dimensions(imgPath)[0])+" "
         key += str(get_image_dimensions(imgPath)[1])+" "
     
-    key += str(identifier)
+    key += str(identifier)+" "
+    key += str(padding)
     print(key)
     return key
     
@@ -103,8 +109,11 @@ def create_model_name(modelname):
         modelname += "TEXT"
     else:
         modelname += "IMAGE"
-    # modelname += datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    modelname += ".pth"
+    if resnet:
+        modelname += "_resnet"
+        modelname += ".t7"
+    else:
+        modelname += ".pth"
     return modelname
 
 
@@ -219,7 +228,17 @@ def operation(num, bit):
     return bin_to_float(modified_bin)
 
 def conta_parametri(modello):
-    return sum(p.numel() for name, p in modello.named_parameters() if 'weight' in name)
+    if(not resnet):
+        a = sum(p.numel() for name, p in modello.named_parameters() if 'weight' in name)
+    else:
+        a =  sum(p.numel() for name, p in modello['net'].named_parameters() if 'weight' in name)
+    # print(a)
+    return a
+
+        
+
+
+
 ####
 
 class MNISTModelNONLinear(nn.Module):
@@ -239,15 +258,17 @@ class MNISTModelNONLinear(nn.Module):
     def forward(self, x):
         return self.layer_stack(x)        
      
-
-model = torch.load(MODELFILENAME)
+    
+        
+model = torch.load(MODELFILENAME)     
+                
 
 if(Istext):
     binary = string_to_binary(text)
 else:
     binary = image_to_binary(imgPath)
 lenBin = len(binary)
-usable_parameters = conta_parametri(model) - 30 - 16# For this reason I take away 30, to have a safety margin from these values (read below)
+usable_parameters = conta_parametri(model) - 30 - 16 - padding# For this reason I take away 30, to have a safety margin from these values (read below)
 #Some types of values ​​cannot be used to store data such as LSB, 
 #these values ​​are values ​​with a very very small decimal number, 
 #starting for example from the 7th decimal place ( >= x * 10^-7).
@@ -257,6 +278,7 @@ if(fullPattern):
     jump = 1
     strt = 0
 else:
+    padding = int(padding/2)
     if(evenPattern):
         strt = 0
         jump = 2
@@ -266,44 +288,106 @@ else:
         jump = 2
         usable_parameters = int(usable_parameters / 2)
     
-
+pd = padding
 
 if(usable_parameters < len(binary)):
     
-    print("The chosen watermark is too large, the maximum number of usable bits is: " + str(usable_parameters))
+    print("The chosen watermark is too large or there is too much padding, the maximum number of usable bits is: " + str(usable_parameters))
     print("The size of your watermark is:" + str(len(binary)))
+    print("The size of the padding is: "+ str(padding))
     
 else:
-    # print(binary)
+   
+            
     id_bin = list(bin(identifier)[2:])
     binary.extend(id_bin)
     for elemento in reversed(id_bin):
         binary.insert(0, elemento)
-    # print(id_bin)
 
-    with torch.no_grad():
-        for name, param in model.named_parameters():
-            if(len(binary) == 0):
-                break
-            if 'weight' in name:
-                # print(f"Weight: {name} - Shape: {param.shape}")
-                num_rows, num_cols = param.shape
-                for r in range(num_rows):
-                    if(len(binary) == 0):
-                        break
-                    for c in range(strt,num_cols,jump):
-                        numero_formattato = f"{abs( param[r,c]):.7f}"
-                        if not numero_formattato.startswith("0.000000"):
-                            parametro = param[r,c].clone().detach()
-                            copy_rounded = round(parametro.item(),6)
-                            if(len(binary) == 0):
-                                break
-                            result = operation(copy_rounded, binary.popleft())
-                            param[r,c] = result
+    if(resnet):
+        with torch.no_grad():
+            for name, param in model["net"].named_parameters():
+                
+                if(len(binary) == 0):
+                    break
+                if 'weight' in name:
+                    shape = param.shape
+                    if len(shape) == 4:  # Layer convoluzionale 4D
+                       for i in range(shape[0]):
+                           for j in range(shape[1]):
+                               for k in range(shape[2]):
+                                   for l in range(strt, shape[3], jump):
+                                       if pd > 0:
+                                           pd -= 1
+                                       else:
+                                           numero_formattato = f"{abs(param[i,j,k,l]):.7f}"
+                                           if not numero_formattato.startswith("0.000000"):
+                                               parametro = param[i,j,k,l].clone().detach()
+                                               copy_rounded = round(parametro.item(), 6)
+                                               if len(binary) == 0:
+                                                   break
+                                               result = operation(copy_rounded, binary.popleft())
+                                               param[i,j,k,l] = result
+                elif len(shape) == 3:  # Layer convoluzionale 3D
+                    for i in range(shape[0]):
+                        for j in range(shape[1]):
+                            for k in range(strt, shape[2], jump):
+                                if pd > 0:
+                                    pd -= 1
+                                else:
+                                    numero_formattato = f"{abs(param[i,j,k]):.7f}"
+                                    if not numero_formattato.startswith("0.000000"):
+                                        parametro = param[i,j,k].clone().detach()
+                                        copy_rounded = round(parametro.item(), 6)
+                                        if len(binary) == 0:
+                                            break
+                                        result = operation(copy_rounded, binary.popleft())
+                                        param[i,j,k] = result
+                elif len(shape) == 2:  # Layer fully connected
+                    for r in range(shape[0]):
+                        for c in range(strt, shape[1], jump):
+                            if pd > 0:
+                                pd -= 1
+                            else:
+                                numero_formattato = f"{abs(param[r,c]):.7f}"
+                                if not numero_formattato.startswith("0.000000"):
+                                    parametro = param[r,c].clone().detach()
+                                    copy_rounded = round(parametro.item(), 6)
+                                    if len(binary) == 0:
+                                        break
+                                    result = operation(copy_rounded, binary.popleft())
+                                    param[r,c] = result
+
+    else:
+
     
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                
+                if(len(binary) == 0):
+                    break
+                if 'weight' in name:
+                    
+                    num_rows, num_cols = param.shape
+                    for r in range(num_rows):
+                        if(len(binary) == 0):
+                            break
+                        for c in range(strt,num_cols,jump):
+                            if(pd > 0):
+                                pd -= 1
+                            else:                                
+                                numero_formattato = f"{abs( param[r,c]):.7f}"
+                                if not numero_formattato.startswith("0.000000"):
+                                    parametro = param[r,c].clone().detach()
+                                    copy_rounded = round(parametro.item(),6)
+                                    if(len(binary) == 0):
+                                        break
+                                    result = operation(copy_rounded, binary.popleft())
+                                    param[r,c] = result
+        
     model_name = create_model_name(modelname)
     print("Model saved under the name: " + model_name)
-    torch.save(model, model_name)
+    torch.save(model, model_name) #  model_name
     crea_file_testo(lenBin)
     print("Key created")
 
