@@ -11,7 +11,7 @@ This repository contains Python scripts for embedding and extracting watermarks 
 
 ## Scripts
 
-### 1. Watermark Embedding (`embed_watermark.py`)
+### 1. Watermark Embedding (`watermark_inserter_LSB.py`)
 
 This script allows you to insert a watermark into the LSB of weights in a neural network model.
 
@@ -28,7 +28,7 @@ This script allows you to insert a watermark into the LSB of weights in a neural
 - Watermarked model
 - Key file for watermark retrieval
 
-### 2. Watermark Extraction (`extract_watermark.py`)
+### 2. Watermark Extraction (`watermark_checker_LSB.py`)
 
 This script retrieves the embedded watermark from a neural network model.
 
